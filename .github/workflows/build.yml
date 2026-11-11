@@ -1,11 +1,11 @@
-# The release packages (README "Downloads"): the launcher and the player, which plays the game folder
-# ACNHRecomp-Importer prepared, with the libraries they need; nothing of the game. One per system, each built on the
-# oldest one it should run on. Run from the Actions tab (Build > Run workflow): the packages are attached to a GitHub
-# release of this repository, and kept as artifacts of the run too.
+# The release package (README "Downloads"): the launcher and the player, which plays the game folder
+# ACNHRecomp-Importer prepared, with the libraries they need; nothing of the game. Built on the oldest system it
+# should run on (Ubuntu 22.04: glibc 2.35). Run from the Actions tab (Build > Run workflow): the package is attached
+# to a GitHub release of this repository, as both the release's .zip and the usual .tar.gz, and kept as an artifact
+# of the run too.
 #
-# Builds are serialized: one at a time, in this repository (the concurrency group below), and the systems are built
-# one after the other rather than side by side. A failed system does not stop the others, but the release is only
-# published when all three succeeded.
+# Linux is the only system this fork packages. Builds are serialized: one at a time, in this repository (the
+# concurrency group below, shared with ci.yml).
 name: Build
 
 on:
@@ -21,7 +21,7 @@ on:
         default: false
 
 permissions:
-  contents: write  # creating the release and uploading the packages
+  contents: write  # creating the release and uploading the package
 
 concurrency:
   group: acnh-build  # shared with ci.yml: one build (or verify) at a time in this repository
@@ -50,77 +50,9 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-  windows:
-    name: Windows x64
-    needs: version
-    runs-on: windows-2022
-    timeout-minutes: 120
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-      NX_RELEASE_VERSION: ${{ needs.version.outputs.version }}  # the version the programs show (#76)
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # the launcher's version (git describe)
-      - uses: ilammy/msvc-dev-cmd@v1  # vcvars64: clang-cl links against the Windows SDK and the C runtime
-        with:
-          arch: x64
-      - name: SDL3, Vulkan headers
-        run: |
-          T=$(cygpath -u "$RUNNER_TEMP")
-          curl -fsSL -o "$T/sdl.zip" "https://github.com/libsdl-org/SDL/releases/download/release-$SDL3/SDL3-devel-$SDL3-VC.zip"
-          7z x -bso0 -o"$RUNNER_TEMP" "$T/sdl.zip"
-          curl -fsSL "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v$VK_HEADERS.tar.gz" | tar -xz -C "$T"
-      - name: libvpx, libvorbis (vcpkg)
-        run: |
-          "$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/vcpkg.exe" install libvpx:x64-windows-static-md-release \
-              libvorbis:x64-windows-static-md-release zlib:x64-windows-static-md-release --disable-metrics
-      - name: Package
-        run: |
-          export PATH="/c/Program Files/LLVM/bin:$PATH"
-          T=$(cygpath -m "$RUNNER_TEMP")
-          tools/package_release_win.sh "$VERSION" "$T/SDL3-$SDL3" \
-              "$(cygpath -m "$VCPKG_INSTALLATION_ROOT")/installed/x64-windows-static-md-release" \
-              "$T/Vulkan-Headers-$VK_HEADERS/include"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: package-windows-x64
-          path: private/release/ACNHRecomp-${{ env.VERSION }}-windows-x64.zip
-          archive: false
-          if-no-files-found: error
-
-  macos:
-    name: macOS arm64
-    needs: [version, windows]  # after Windows: one build at a time
-    if: ${{ always() && needs.version.result == 'success' && !cancelled() }}
-    runs-on: macos-15  # GitHub dropped macos-14; Homebrew's libraries here need macOS 15 (checked by the package script)
-    timeout-minutes: 120
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-      NX_RELEASE_VERSION: ${{ needs.version.outputs.version }}  # the version the programs show (#76)
-      MACOSX_DEPLOYMENT_TARGET: "15.0"
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Tools
-        run: brew install ninja sdl3 molten-vk vulkan-loader vulkan-headers libvpx libvorbis
-      - name: Package
-        run: tools/package_release_mac.sh "$VERSION"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: package-macos-arm64
-          path: private/release/ACNHRecomp-${{ env.VERSION }}-macOS-arm64.zip
-          archive: false
-          if-no-files-found: error
-
   linux:
     name: Linux x64
-    needs: [version, macos]  # last: one build at a time
-    if: ${{ always() && needs.version.result == 'success' && !cancelled() }}
+    needs: version
     runs-on: ubuntu-22.04  # glibc 2.35: what the package runs on, and newer
     timeout-minutes: 120
     env:
@@ -164,23 +96,51 @@ jobs:
           CC: clang-18
           CXX: clang++-18
         run: tools/package_release_linux.sh "$VERSION" "$RUNNER_TEMP/sdl3" "$RUNNER_TEMP/Vulkan-Headers-$VK_HEADERS/include"
+      - name: Package zip
+        run: |
+          # The same tree as the .tar.gz, in a .zip (the archive the README's Downloads list names). ZipInfo.from_file
+          # keeps the executables' permission bits.
+          python3 - <<'EOF'
+          import os, tarfile, tempfile, zipfile
+          version = os.environ["VERSION"]
+          tar_path = f"private/release/ACNHRecomp-{version}-linux-x64.tar.gz"
+          zip_path = f"private/release/ACNHRecomp-{version}-linux-x64.zip"
+          with tempfile.TemporaryDirectory() as tmp, \
+               zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              with tarfile.open(tar_path) as t:
+                  t.extractall(tmp)
+              for root, dirs, files in os.walk(tmp):
+                  dirs.sort()
+                  for name in sorted(files):
+                      p = os.path.join(root, name)
+                      info = zipfile.ZipInfo.from_file(p, os.path.relpath(p, tmp))
+                      info.compress_type = zipfile.ZIP_DEFLATED
+                      with open(p, "rb") as f:
+                          z.writestr(info, f.read())
+          print(zip_path, os.path.getsize(zip_path))
+          EOF
       - uses: actions/upload-artifact@v7
         with:
-          name: package-linux-x64
+          name: package-linux-x64-zip
+          path: private/release/ACNHRecomp-${{ env.VERSION }}-linux-x64.zip
+          archive: false
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-linux-x64-targz
           path: private/release/ACNHRecomp-${{ env.VERSION }}-linux-x64.tar.gz
           archive: false
           if-no-files-found: error
 
   release:
     name: Release
-    needs: [version, windows, macos, linux]
-    if: ${{ needs.windows.result == 'success' && needs.macos.result == 'success' && needs.linux.result == 'success' }}
+    needs: [version, linux]
+    if: ${{ needs.linux.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v7
         with:
-          pattern: package-*
           path: dist
           merge-multiple: true
       - name: Publish
@@ -192,7 +152,7 @@ jobs:
         run: |
           ls -la dist
           notes=$(cat <<EOF
-          ACNHRecomp $VERSION — a build of this fork.
+          ACNHRecomp $VERSION — a build of this fork (Linux x64).
 
           Native PC port of Animal Crossing: New Horizons (static recompilation). It contains no game code or assets:
           it plays the game folder ACNHRecomp-Importer prepares from your own copy.
@@ -206,6 +166,6 @@ jobs:
           else
             args=()
             if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
-            gh release create "$TAG" dist/* --title "ACNHRecomp $VERSION" --notes "$notes" \
+            gh release create "$TAG" dist/* --title "ACNHRecomp $VERSION (Linux x64)" --notes "$notes" \
                --repo "$GITHUB_REPOSITORY" "${args[@]}"
           fi

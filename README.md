@@ -231,7 +231,8 @@ has .NET 10), the Ryubing shader translator source and Dear ImGui.
 ### Downloads
 
 The [releases](https://github.com/naufalalamsyah453/ACNHRecomp/releases) are ready to play: none of them has any part
-of the game, and none needs a compiler. You need two things:
+of the game, and none needs a compiler. You need two things. This fork publishes the **Linux x64** package only; the
+other platforms below are built by the upstream project.
 
 1. **Your game folder**, made by [ACNHRecomp-Importer](#your-game-folder) (on our
    [Discord](https://discord.gg/VJW9Dtdu7a)) from your own copy of the game. Run it once and keep the folder it writes.

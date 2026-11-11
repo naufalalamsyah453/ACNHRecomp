@@ -1,4 +1,5 @@
-// Button icons for the player's controller (settings: controls.glyphs = auto, switch, xbox or playstation).
+// Button icons: the player's controller or keyboard (settings: controls.glyphs = auto, switch, xbox, playstation
+// or keyboard).
 //
 // ACNH draws every button prompt (dialogs, menus, the key guide) as private-use characters of ParkExt.bfttf, its
 // own extension font in Font/ScalableFont.sarc.zs, which every combined font in Font/Fcpx.sarc.zs lists first; the
@@ -6,8 +7,13 @@
 // with the icons redrawn for each style and face-button layout (input.layout, which moves the game's A to the
 // bottom button), under <data root>/fonts/glyphs_<style>/<layout>/romfs/. This picks the copy to serve.
 //
-// The game opens the archive once, while booting, so a change of style or layout shows at the next start; "auto"
-// asks which kind of controller is connected at that moment (none: the original icons).
+// The keyboard style has no layout directory (the pad's layout does not move a key) and is built at boot for the
+// keys bound right now (glyphs_keys.cpp: keycap glyphs and a patched cmap, cached per set of keys). "auto" asks
+// which kind of controller is connected at that moment: none means the keyboard, and the original icons when the
+// tool never wrote a keyboard archive.
+//
+// The game opens the archive once, while booting, so a change of style, layout or key binding shows at the next
+// start.
 //
 // Entry point, for resolve() in hle_fs.cpp on the RomFS mount (path relative to the RomFS, '/' separated):
 //   std::string glyph_override(const std::string& romfs_path);  // host path to serve instead, or "" for the RomFS
@@ -24,20 +30,34 @@ namespace fs = std::filesystem;
 
 namespace nx {
 
+std::string keyboard_glyph_archive();  // glyphs_keys.cpp
+
 std::string glyph_override(const std::string& romfs_path) {
     if (romfs_path != "Font/ScalableFont.sarc.zs") return {};
     std::string style = config_get("controls.glyphs", "auto");
+    bool keyboard = false;
     if (style == "auto") {
         style = plat::controller_kind();
-        // Pads SDL cannot name mostly follow the Xbox layout and labels (XInput); no pad: the keyboard, original icons.
+        // Pads SDL cannot name mostly follow the Xbox layout and labels (XInput); no pad: the keyboard's keycaps.
         if (style == "generic") style = "xbox";
+        if (style.empty()) keyboard = true;
     }
-    if (style != "xbox" && style != "playstation" && style != "switch") style = "switch";
+    if (style == "keyboard") keyboard = true;
+    if (!keyboard && style != "xbox" && style != "playstation" && style != "switch") style = "switch";
     std::string layout = config_get("input.layout", "console") == "xbox" ? "xbox" : "console";
 
     static std::mutex lock;
     static std::string logged;  // log each choice once: the game may open the archive more than once
     std::lock_guard lk(lock);
+    if (keyboard) {
+        std::string p = keyboard_glyph_archive();
+        if (!p.empty()) {
+            if (logged != "keyboard/" + p) log("glyphs: keyboard button icons <- %s", p.c_str());
+            logged = "keyboard/" + p;
+            return p;
+        }
+        style = "switch";  // no keyboard archive: the original icons
+    }
     std::string choice = style + "/" + layout, path;
     if (style != "switch" || layout != "console") {  // switch on the Switch layout is the RomFS's own archive
         fs::path p = fs::u8path(plat::data_root()) / "fonts" / ("glyphs_" + style) / layout / "romfs" /

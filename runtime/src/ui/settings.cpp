@@ -1006,7 +1006,8 @@ void page_controls() {
     row("controls.glyphs", nullptr, [&](float w) {
         combo("controls.glyphs", "auto",
               {{"auto", tr("controls.glyphs.auto")}, {"switch", tr("controls.glyphs.switch")},
-               {"xbox", tr("controls.glyphs.xbox")}, {"playstation", tr("controls.glyphs.playstation")}},
+               {"xbox", tr("controls.glyphs.xbox")}, {"playstation", tr("controls.glyphs.playstation")},
+               {"keyboard", tr("controls.glyphs.keyboard")}},
               w);
     });
     row("controls.rumble", nullptr, [&](float w) { toggle("input.rumble", true, w); });
@@ -1314,6 +1315,8 @@ struct NavNames {
 };
 NavNames nav_names() {
     std::string style = config_get("controls.glyphs", "auto"), kind = plat::controller_kind();
+    if (style == "keyboard" || (style == "auto" && kind.empty()))
+        return {"PgUp / PgDn", tr("nav.arrows"), "Space", "Shift"};
     if (kind.empty()) return {"PgUp / PgDn", tr("nav.arrows"), "Enter", "Esc"};
     std::string k = style == "auto" ? kind : style;
     if (k == "playstation") return {"L1 / R1", "D-Pad", "X", "O"};
@@ -1527,7 +1530,7 @@ bool settings_draw(float scale, ImFont* title, float opening) {
         l_label = "L";
         r_label = "R";
     }
-    if (kind.empty()) l_label = "PgUp", r_label = "PgDn";  // no controller: the keys that change the tab
+    if (kind.empty() || glyph_style == "keyboard") l_label = "PgUp", r_label = "PgDn";  // the keys that change the tab
     // The arrows are drawn (bumper_label): the UI font has no ◀ ▶, which showed as "?".
     const std::string& l_text = l_label;
     const std::string& r_text = r_label;

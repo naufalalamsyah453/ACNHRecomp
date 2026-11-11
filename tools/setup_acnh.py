@@ -620,8 +620,12 @@ def main():
                     log=os.path.join(logs, "button_font.log"))
                 break
     # ACNH draws its button prompts with its own ParkExt font (Font/ScalableFont.sarc.zs): a copy per controller
-    # style and face-button layout, chosen at boot by controls.glyphs (runtime/src/glyphs.cpp). About 13 MB each.
-    if not os.path.exists(os.path.join(fonts, "glyphs_xbox", "console", "romfs", "Font", "ScalableFont.sarc.zs")) or force("glyphs"):
+    # style and face-button layout, chosen at boot by controls.glyphs (runtime/src/glyphs.cpp), plus the keyboard
+    # style, whose cmap the runtime patches for the keys bound right now (runtime/src/glyphs_keys.cpp). They are
+    # about 13 MB each.
+    icons = os.path.join(fonts, "glyphs_xbox", "console", "romfs", "Font", "ScalableFont.sarc.zs")
+    keys = os.path.join(fonts, "glyphs_keyboard", "patch.txt")
+    if not os.path.exists(icons) or not os.path.exists(keys) or force("glyphs"):
         run([py, "tools/make_button_glyphs.py", "--romfs", os.path.join(G, "extract", "romfs"), "--out", fonts],
             log=os.path.join(logs, "glyphs.log"))
 

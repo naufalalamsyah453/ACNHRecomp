@@ -96,6 +96,9 @@ if(NX_TESTS AND NOT ANDROID)
     add_executable(astc_test tests/astc_test.cpp runtime/src/nvn/nvn_astc.cpp)
     target_include_directories(astc_test PRIVATE runtime/src/nvn)
     add_test(NAME astc COMMAND astc_test --selftest)
+    add_executable(glyph_patch_test tests/glyph_patch_test.cpp runtime/src/glyphs_patch.cpp)
+    target_include_directories(glyph_patch_test PRIVATE runtime/src)
+    add_test(NAME glyph_patch COMMAND glyph_patch_test "${CMAKE_BINARY_DIR}/glyph_patch_out")
     add_executable(shader_cache_test tests/shader_cache_test.cpp runtime/src/nvn/nvn_shaders.cpp
                    runtime/src/nvn/nvn_spirv_reflect.cpp)
     target_compile_definitions(shader_cache_test PRIVATE NX_SHADERS_STANDALONE)
@@ -272,6 +275,8 @@ set(NX_RUNTIME_SOURCES
     runtime/src/mod_fetch.cpp
     runtime/src/discord_presence.cpp
     runtime/src/glyphs.cpp
+    runtime/src/glyphs_keys.cpp
+    runtime/src/glyphs_patch.cpp
     runtime/src/input_script.cpp
     runtime/src/touch_layout.cpp
     runtime/src/perf_hint.cpp

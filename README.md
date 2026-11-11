@@ -230,12 +230,13 @@ has .NET 10), the Ryubing shader translator source and Dear ImGui.
 
 ### Downloads
 
-The [releases](https://github.com/Nycolazs/ACNHRecomp/releases) are ready to play: none of them has any part of the
-game, and none needs a compiler. You need two things:
+The [releases](https://github.com/naufalalamsyah453/ACNHRecomp/releases) are ready to play: none of them has any part
+of the game, and none needs a compiler. You need two things:
 
 1. **Your game folder**, made by [ACNHRecomp-Importer](#your-game-folder) (on our
    [Discord](https://discord.gg/VJW9Dtdu7a)) from your own copy of the game. Run it once and keep the folder it writes.
-2. **The package for your system** from the [latest release](https://github.com/Nycolazs/ACNHRecomp/releases/latest):
+2. **The package for your system** from the
+   [latest release](https://github.com/naufalalamsyah453/ACNHRecomp/releases/latest):
 
 | File | System |
 |---|---|
@@ -470,7 +471,7 @@ restart are marked on the screen. Environment variables set on the command line 
 | `audio.reverb` | `0`, `1` | `NX_AUDIO_REVERB` |
 | `audio.mute_background` | `0`, `1` | |
 | `input.layout` | `console`, `xbox` (`nintendo` is read as `console`) | |
-| `controls.glyphs` | `auto`, `switch`, `xbox`, `playstation` | |
+| `controls.glyphs` | `auto`, `switch`, `xbox`, `playstation`, `keyboard` | |
 | `input.rumble` | `0`, `1` | |
 | `input.deadzone` | `5`-`50` (percent) | |
 | `input.key.<action>` | An SDL key name | |
@@ -503,9 +504,14 @@ Any controller that SDL3 recognises works: Xbox, PlayStation, Switch Pro Control
 gamepads.
 
 - **Confirm / cancel layout:** Nintendo (A on the right) or Xbox/PlayStation (confirm on the bottom).
-- **Button icons:** the game's own on-screen button prompts are redrawn for Xbox, PlayStation or Switch, or match
-  the connected controller automatically. The icons are generated during setup from the game's own icon font
-  (`tools/make_button_glyphs.py`), so no game artwork is shipped.
+- **Button icons:** the game's own on-screen button prompts are redrawn for Xbox, PlayStation, Switch or keyboard,
+  or match the connected controller automatically (no controller: the keyboard). The icons are generated during
+  setup from the game's own icon font (`tools/make_button_glyphs.py`), so no game artwork is shipped.
+- **Keyboard icons:** *Button icons > Keyboard* draws every prompt as a keycap with the label of the key bound to
+  that action right now (`Space`, `L Shift`, `X`, `Enter`, ...), in-game dialogs, menus and the key guide alike. A
+  remap on the Controls page shows at the next start: the runtime rewrites the font's character map for the
+  current bindings, so nothing has to be regenerated. The D-pad keeps its drawn cross (it reads as the arrow keys)
+  and the sticks keep their prompts.
 - **Keyboard:** every key can be remapped on the Controls page.
 
 Default keyboard layout:

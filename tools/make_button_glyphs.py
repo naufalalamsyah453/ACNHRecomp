@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Redraw ACNH's button icons for other controllers (Xbox, PlayStation), from the player's own RomFS.
+"""Redraw ACNH's button icons for other controllers (Xbox, PlayStation, keyboard), from the player's own RomFS.
 
     make_button_glyphs.py [--romfs private/acnh/extract/romfs] [--out private/acnh/fonts] [--preview PNG]
+    make_button_glyphs.py --selftest
 
 Where the icons come from: every button prompt in ACNH (dialogs, menus, the key guide at the bottom right) is a
 private-use character drawn with ParkExt.bfttf, the game's own extension font in Font/ScalableFont.sarc.zs. All 21
@@ -19,11 +20,20 @@ with style xbox or playstation, and switch for the xbox layout only (the origina
 switch with the console layout is the RomFS itself. The runtime serves the chosen archive in place of the RomFS
 one (runtime/src/glyphs.cpp). Everything written embeds game data: it stays in private/ and is never committed.
 
+The keyboard style (keycaps with the bound key's label) is the one exception to "one archive per layout": the
+face-button layout only moves pad buttons, and the keys are the same either way, so it has no <layout> directory.
+Because the keys can be remapped in the settings screen, its archive carries a keycap glyph for every label of
+every prompt plus a small manifest (<out>/glyphs_keyboard/patch.txt), and the runtime rewrites the font's cmap at
+boot to the labels of the keys actually bound (runtime/src/glyphs_keys.cpp). The archive at
+<out>/glyphs_keyboard/romfs/ is the fallback (fresh bindings), kept so the game always has valid icons.
+
 The fonts are single-colour: the game tints glyphs with the text colour, so an Xbox icon is told apart by its
-letter, not its colour. Requires fontTools and zstandard (Pillow for --preview).
+letter, not its colour. Requires fontTools and zstandard (Pillow for --preview). --selftest builds a synthetic
+font in memory and checks the cmap patching the runtime does, so it needs no game data (CI runs it).
 """
 import argparse
 import copy
+import io
 import math
 import os
 import struct
@@ -36,6 +46,7 @@ from fontTools.pens.reverseContourPen import ReverseContourPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
+from fontTools.ttLib.tables.DefaultTable import DefaultTable
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ARCHIVE = "Font/ScalableFont.sarc.zs"
@@ -62,6 +73,18 @@ OTHER_LABELS = {
     "xbox": {"L": "LB", "R": "RB", "ZL": "LT", "ZR": "RT", "plus": "menu", "minus": "view"},
     "playstation": {"L": "L1", "R": "R1", "ZL": "L2", "ZR": "R2", "plus": "options", "minus": "create"},
 }
+
+# The keyboard style: the label each game action shows with a fresh binding. A remap only changes which key runs
+# the action, and the runtime patches the font's cmap to that key's label at boot (runtime/src/glyphs_keys.cpp),
+# so every label below is drawn for every prompt. These defaults mirror kKeyNames in runtime/src/platform_sdl.cpp,
+# and the names in the catalog mirror key_label() in runtime/src/glyphs_keys.cpp: keep them in step.
+KEYBOARD_DEFAULTS = {"a": "SPC", "b": "SHF", "x": "X", "y": "F", "l": "Q", "r": "E", "zl": "Z", "zr": "C",
+                     "plus": "ENT", "minus": "ESC"}
+# Every keycap label the prompts are drawn for; "KEY" is the runtime's fallback for a key it has no name for.
+LABELS = (list("ABCDEFGHIJKLMNOPQRSTUVWXYZ") + list("0123456789") +
+          ["SPC", "SHF", "ENT", "ESC", "TAB", "BSP", "CTL", "ALT", "UP", "DN", "LT", "RT",
+           "PGU", "PGD", "HOM", "END", "INS", "DEL"] +
+          ["F%d" % n for n in range(1, 13)] + ["K%d" % n for n in range(10)] + ["KEY"])
 
 # ParkExt code points by the game button they show; "fill" is the solid set (E0Ex), "line" the outlined one (E0Ax).
 FACE = {"A": (0xE0E0, 0xE0A0), "B": (0xE0E1, 0xE0A1), "X": (0xE0E2, 0xE0A2), "Y": (0xE0E3, 0xE0A3)}
@@ -108,21 +131,29 @@ def read_sarc(path):
     return raw[:data_off], members, align
 
 
-def write_sarc(head, members, align, path):
-    """The same archive with new member data: nodes and their order kept, data re-laid out at the same alignment."""
+def sarc_parts(head, members, align):
+    """(header, body, {name: body offset}) of the archive: nodes and their order kept, data re-laid out at the
+    same alignment. The member data of name starts at len(header) + offset, so the absolute file offset is known."""
     head = bytearray(head)
-    body, pos = bytearray(), 0
-    for node, _, data in members:
+    body, pos, starts = bytearray(), 0, {}
+    for node, name, data in members:
         pos = (pos + align - 1) // align * align
         body += b"\0" * (pos - len(body))
         struct.pack_into("<II", head, node + 8, pos, pos + len(data))
+        starts[name] = pos
         body += data
         pos += len(data)
     struct.pack_into("<I", head, 0x8, len(head) + len(body))
+    return bytes(head), bytes(body), starts
+
+
+def write_sarc(head, members, align, path):
+    """The same archive with new member data: nodes and their order kept, data re-laid out at the same alignment."""
+    head, body, _ = sarc_parts(head, members, align)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:
-        f.write(zstandard.ZstdCompressor(level=9, threads=-1).compress(bytes(head + body)))
+        f.write(zstandard.ZstdCompressor(level=9, threads=-1).compress(head + body))
     os.replace(tmp, path)
 
 
@@ -222,6 +253,10 @@ class Labels:
         k = cap_h / self.cap
         return k * (sum(self.font["hmtx"][self.cmap[ord(c)]][0] for c in s) - 0.04 * self.cap * (len(s) - 1))
 
+    def has(self, s):
+        """Whether the label font can draw every character of s (a glyph missing from it is not drawn)."""
+        return all(ord(c) in self.cmap for c in s)
+
     def draw(self, pen, s, cx, cy, cap_h, hole):
         k = cap_h / self.cap
         x = -self.width(s, cap_h) / (2 * k)
@@ -264,6 +299,23 @@ class Painter:
             pen.poly(tri(0.62 * r - 0.19 * r * 2), hole=not cut)  # inset by the stroke (inradius = R/2)
         else:
             self.labels.draw(pen, label, cx, cy, 1.05 * r, hole=cut)
+        return pen.glyph()
+
+    def key(self, box, label, solid):
+        """A keycap: the key's label cut out of a filled cap, or drawn inside an outlined one."""
+        x0, y0, x1, y1 = box
+        w, h = x1 - x0, y1 - y0
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        r, t = 0.20 * min(w, h), 0.075 * min(w, h)
+        pen = Pen()
+        pen.rrect(x0, y0, x1, y1, r)
+        if not solid:
+            pen.rrect(x0 + t, y0 + t, x1 - t, y1 - t, max(0.0, r - t), hole=True)
+        if label:
+            pad = t + 0.06 * min(w, h)
+            cap = min(0.58 * (h - 2 * t), 0.86 * (w - 2 * pad) / max(1e-6, self.labels.width(label, 1.0)))
+            if cap > 0:
+                self.labels.draw(pen, label, cx, cy, cap, hole=solid)
         return pen.glyph()
 
     def shoulder(self, box, label, trigger, solid):
@@ -366,8 +418,8 @@ class Painter:
 # ---- styles -----------------------------------------------------------------------------------------------------
 
 def plan(style, layout):
-    """{code point: ("draw", kind, args, code point whose box it fills) | ("copy", source code point)} for one
-    style and layout."""
+    """{code point: ("draw", kind, args, code point whose box it fills) | ("copy", source code point) |
+    ("keycaps", action, box code point, painter, solid)} for one style and layout."""
     pos = LAYOUTS[layout]
     out = {}
     if style == "switch":
@@ -377,6 +429,24 @@ def plan(style, layout):
             src = next(g for g, p in LAYOUTS["console"].items() if p == pos[game])
             if src != game:
                 out[fill], out[line] = ("copy", FACE[src][0]), ("copy", FACE[src][1])
+        return out
+    if style == "keyboard":
+        # One keycap per catalog label at every prompt's own box: the default label is what a fresh binding shows,
+        # and the runtime points the cmap at the label of the key actually bound. The D-pad keeps its drawn cross
+        # (it reads as the arrow keys), and so do the stick prompts.
+        for game, (fill, line) in FACE.items():
+            out[fill] = ("keycaps", game.lower(), fill, "key", True)
+            out[line] = ("keycaps", game.lower(), line, "key", False)
+        for game, (fill, line) in SHOULDER.items():
+            out[fill] = ("keycaps", game.lower(), fill, "shoulder", True)
+            out[line] = ("keycaps", game.lower(), line, "shoulder", False)
+        for game, cps in SYSTEM.items():
+            for i, (cp, frame) in enumerate(cps):
+                # a bare minus is a flat bar: its replacement gets the bare plus's square box instead
+                box_cp = 0xE0F1 if frame == "bare" else cp
+                out[cp] = ("keycaps", game.lower(), box_cp, "key", i % 2 == 0)
+        for cp, spec in DPAD.items():
+            out[cp] = ("draw", "dpad", spec, cp)
         return out
     for game, (fill, line) in FACE.items():
         label = FACE_LABELS[style][pos[game]]
@@ -397,24 +467,46 @@ def plan(style, layout):
 
 
 def build(ext_ttf, labels, style, layout):
-    """ParkExt (TTF bytes) with the plan's glyphs replaced; returns (TTFont, {code point: kind}) ."""
-    import io
+    """ParkExt (TTF bytes) with the plan's glyphs replaced; returns (TTFont, {code point: kind}, keyboard) where
+    keyboard is {code point: (action, {label: glyph name})} for the keycap prompts (empty for other styles)."""
     font = TTFont(io.BytesIO(ext_ttf))
     orig = TTFont(io.BytesIO(ext_ttf))
-    cmap, glyf, hmtx = font.getBestCmap(), font["glyf"], font["hmtx"]
+    sub = format4_subtable(font)
+    cmap = sub.cmap if sub is not None else font.getBestCmap()
+    ocmap = orig.getBestCmap()  # the original outlines: cmap[cp] may point at a keycap added for an earlier prompt
+    glyf, hmtx = font["glyf"], font["hmtx"]
     painter = Painter(labels)
-    done = {}
-    for cp, (op, *args) in sorted(plan(style, layout).items()):
+    order, done, keyboard = list(font.getGlyphOrder()), {}, {}  # a copy: glyf appends to its own order as glyphs go in
+    for cp, spec in sorted(plan(style, layout).items()):
         name = cmap.get(cp)
         if not name:
             continue  # not in this font version: nothing to replace
+        op = spec[0]
         if op == "copy":
-            src = cmap[args[0]]
+            src = ocmap[spec[1]]
             glyf[name] = copy.deepcopy(orig["glyf"][src])
             hmtx[name] = orig["hmtx"][src]
-            done[cp] = f"copy U+{args[0]:04X}"
+            done[cp] = f"copy U+{spec[1]:04X}"
             continue
-        kind, params, box_cp = args
+        if op == "keycaps":
+            action, box_cp, kind, solid = spec[1:]
+            g0 = orig["glyf"][ocmap[box_cp]]
+            box = (g0.xMin, g0.yMin, g0.xMax, g0.yMax)
+            add = {}
+            for label in LABELS:
+                gname = "kbd%04X_%s" % (cp, label)
+                glyph = (painter.key(box, label, solid) if kind == "key"
+                         else painter.shoulder(box, label, action.startswith("z"), solid))
+                glyf[gname] = glyph
+                glyph.recalcBounds(glyf)
+                hmtx[gname] = (orig["hmtx"][name][0], glyph.xMin)  # same advance as the old icon
+                order.append(gname)
+                add[label] = gname
+            keyboard[cp] = (action, add)
+            cmap[cp] = add[KEYBOARD_DEFAULTS[action]]  # what a fresh binding shows (the fallback archive)
+            done[cp] = "keycaps (%d)" % len(add)
+            continue
+        kind, params, box_cp = spec[1:]
         g0 = orig["glyf"][cmap[box_cp]]
         box = (g0.xMin, g0.yMin, g0.xMax, g0.yMax)
         glyph = getattr(painter, kind)(box, *params)
@@ -422,18 +514,23 @@ def build(ext_ttf, labels, style, layout):
         glyph.recalcBounds(glyf)
         hmtx[name] = (orig["hmtx"][name][0], glyph.xMin)  # same advance as before; lsb from the new outline
         done[cp] = kind
+    font.setGlyphOrder(order)
     if "DSIG" in font:  # a signature over the old tables
         del font["DSIG"]
-    return font, done
+    return font, done, keyboard
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--romfs", default=os.path.join(REPO, "private", "acnh", "extract", "romfs"))
     ap.add_argument("--out", default=os.path.join(REPO, "private", "acnh", "fonts"))
-    ap.add_argument("--styles", default="xbox,playstation,switch", help="comma separated")
+    ap.add_argument("--styles", default="xbox,playstation,switch,keyboard", help="comma separated")
     ap.add_argument("--preview", help="also render every style's icons side by side to this PNG (needs Pillow)")
+    ap.add_argument("--selftest", action="store_true", help="check the cmap patching on a synthetic font (no game data)")
     args = ap.parse_args()
+    if args.selftest:
+        selftest()
+        return
 
     head, members, align = read_sarc(os.path.join(args.romfs, ARCHIVE))
     by_name = {name: k for k, (_, name, _) in enumerate(members)}
@@ -442,19 +539,23 @@ def main():
         if need not in by_name:
             sys.exit(f"{ARCHIVE} has no {need}: not ACNH 2.0+ data?")
     ext_ttf, key = bfttf_decode(members[by_name[EXT_FONT]][2])
-    import io
     labels = Labels(TTFont(io.BytesIO(bfttf_decode(members[by_name[LABEL_FONT]][2])[0])))
 
     variants = []
     for style in [s.strip() for s in args.styles.split(",") if s.strip()]:
-        for layout in LAYOUTS:
+        for layout in ([None] if style == "keyboard" else LAYOUTS):
             if style == "switch" and layout == "console":
                 continue  # the RomFS as it is
-            font, done = build(ext_ttf, labels, style, layout)
+            font, done, keyboard = build(ext_ttf, labels, style, layout or "console")
             buf = io.BytesIO()
             font.save(buf)
             ttf = buf.getvalue()
-            base = os.path.join(args.out, f"glyphs_{style}", layout)
+            offsets = {}
+            if keyboard:  # the runtime patches glyph ids, so the cmap needs a word per prompt (canonical_cmap)
+                canon, offsets = canonical_cmap(ttf)
+                if canon is not None:
+                    ttf = canon
+            base = os.path.join(args.out, f"glyphs_{style}", layout or "")
             os.makedirs(base, exist_ok=True)
             with open(os.path.join(base, "ParkExt.ttf"), "wb") as f:
                 f.write(ttf)
@@ -462,8 +563,27 @@ def main():
             node, name, _ = new[by_name[EXT_FONT]]
             new[by_name[EXT_FONT]] = (node, name, bfttf_encode(ttf, key))
             write_sarc(head, new, align, os.path.join(base, "romfs", ARCHIVE))
-            print(f"glyphs_{style}/{layout}: {len(done)} glyphs redrawn")
-            variants.append((f"{style} / {layout} layout", os.path.join(base, "ParkExt.ttf")))
+            if keyboard and offsets:
+                # The uncompressed archive the runtime patches (the same bytes as romfs/, uncompressed), where the
+                # font starts in it, and the idDelta word of each prompt relative to the font. The runtime copies
+                # the bytes and only XORs the BFTTF key back in at each absolute position.
+                shead, sbody, starts = sarc_parts(head, new, align)
+                font_at = len(shead) + starts[name] + 8  # past the BFTTF header (magic and size)
+                with open(os.path.join(base, "base.sarc"), "wb") as f:
+                    f.write(shead + sbody)
+                with open(os.path.join(base, "patch.txt"), "w", encoding="utf-8", newline="\n") as f:
+                    f.write("# keyboard icons: the cmap idDelta word of each prompt, patched by runtime/src/glyphs_keys.cpp\n")
+                    f.write("key %08x\n" % key)
+                    f.write("base %d\n" % font_at)
+                    f.write("labels %s\n" % ",".join(LABELS))
+                    for cp in sorted(keyboard):
+                        action, add = keyboard[cp]
+                        gid = font.getGlyphID(add[LABELS[0]])
+                        f.write("cp %04x %s %d %d\n" % (cp, action, offsets[cp], gid))
+                print(f"glyphs_{style}: {len(done)} glyphs redrawn, {len(keyboard)} prompts follow the bound keys")
+            else:
+                print(f"glyphs_{style}/{layout}: {len(done)} glyphs redrawn")
+            variants.append((f"{style} / {layout or 'keys'} layout", os.path.join(base, "ParkExt.ttf")))
 
     if args.preview:
         orig_path = os.path.join(args.out, "ParkExt.original.ttf")
@@ -471,6 +591,235 @@ def main():
             f.write(ext_ttf)
         label_ttf = bfttf_decode(members[by_name[LABEL_FONT]][2])[0]
         render_preview([("switch (original)", orig_path)] + variants, label_ttf, args.preview)
+
+
+
+# ---- cmap patching (the keyboard icons follow the player's keys) ---------------------------------------------------
+# The runtime rewrites 16-bit glyph ids only, so a keyboard archive's cmap subtable is rebuilt with one segment per
+# code point (idRangeOffset 0): every prompt's mapping is then a single idDelta word that can be pointed at. The
+# table is put back as a raw table object, so fontTools still lays out and checksums the file.
+
+
+def sfnt_tables(ttf):
+    """{tag: (offset, length)} of a TrueType font's tables."""
+    if len(ttf) < 12 or ttf[:4] not in (b"\x00\x01\x00\x00", b"true", b"OTTO"):
+        return {}
+    out = {}
+    for i in range(struct.unpack_from(">H", ttf, 4)[0]):
+        tag, _, off, length = struct.unpack_from(">4sIII", ttf, 12 + i * 16)
+        out[tag.decode("latin-1")] = (off, length)
+    return out
+
+
+def subtable_len(ttf, at):
+    """A cmap subtable's length: u32 for formats 8/10/12/13, u16 for the rest."""
+    if struct.unpack_from(">H", ttf, at)[0] in (8, 10, 12, 13):
+        return struct.unpack_from(">I", ttf, at + 4)[0]
+    return struct.unpack_from(">H", ttf, at + 2)[0]
+
+
+def format4_subtable(font):
+    """The format 4 subtable the game reads (Windows Unicode BMP if there is one)."""
+    best = None
+    for sub in font["cmap"].tables:
+        if sub.format != 4:
+            continue
+        if (sub.platformID, sub.platEncID) == (3, 1):
+            return sub
+        if best is None:
+            best = sub
+    return best
+
+
+def decode_format4(ttf, at):
+    """{code point: glyph id} of a format 4 cmap subtable."""
+    seg = struct.unpack_from(">H", ttf, at + 6)[0] // 2
+    ends = struct.unpack_from(">%dH" % seg, ttf, at + 14)
+    starts = struct.unpack_from(">%dH" % seg, ttf, at + 16 + 2 * seg)
+    deltas = struct.unpack_from(">%dH" % seg, ttf, at + 16 + 4 * seg)
+    ros = struct.unpack_from(">%dH" % seg, ttf, at + 16 + 6 * seg)
+    out = {}
+    for i in range(seg):
+        base = at + 16 + 6 * seg + 2 * i  # idRangeOffset[i], which its offsets are relative to
+        for cp in range(starts[i], ends[i] + 1):
+            if ros[i]:
+                gid = struct.unpack_from(">H", ttf, base + ros[i] + 2 * (cp - starts[i]))[0]
+                gid = (gid + deltas[i]) & 0xFFFF if gid else 0
+            else:
+                gid = (cp + deltas[i]) & 0xFFFF
+            if gid:
+                out[cp] = gid
+    return out
+
+
+def build_format4(mapping):
+    """(bytes, {code point: idDelta byte offset}) of a format 4 subtable with one segment per code point."""
+    cps = [cp for cp in sorted(mapping) if cp < 0xFFFF] + [0xFFFF]
+    seg = len(cps)
+    length = 16 + 8 * seg
+    if length > 0xFFFF:
+        return None, {}  # too many code points for one segment each: no live patching
+    search = 2 * (1 << int(math.log2(seg)))
+    table = bytearray(length)
+    struct.pack_into(">7H", table, 0, 4, length, 0, 2 * seg, search, int(math.log2(seg)), 2 * seg - search)
+    struct.pack_into(">%dH" % seg, table, 14, *cps)  # endCode
+    struct.pack_into(">%dH" % seg, table, 16 + 2 * seg, *cps)  # startCode
+    struct.pack_into(">%dH" % seg, table, 16 + 4 * seg, *((mapping.get(cp, 0) - cp) & 0xFFFF for cp in cps))
+    return bytes(table), {cp: 16 + 4 * seg + 2 * i for i, cp in enumerate(cps) if cp != 0xFFFF}
+
+
+def canonical_cmap(ttf):
+    """(ttf bytes, {code point: absolute idDelta offset in them}) with the format 4 subtable rebuilt as one segment
+    per code point; (None, {}) when the font has no such subtable to patch."""
+    tabs = sfnt_tables(ttf)
+    if "cmap" not in tabs:
+        return None, {}
+    coff = tabs["cmap"][0]
+    n = struct.unpack_from(">H", ttf, coff + 2)[0]
+    recs = [struct.unpack_from(">HHI", ttf, coff + 4 + i * 8) for i in range(n)]
+    target = None
+    for i, (plat, enc, off) in enumerate(recs):
+        if struct.unpack_from(">H", ttf, coff + off)[0] == 4 and (target is None or (plat, enc) == (3, 1)):
+            target = i
+            if (plat, enc) == (3, 1):
+                break
+    if target is None:
+        return None, {}
+    sub, inside = build_format4(decode_format4(ttf, coff + recs[target][2]))
+    if sub is None:
+        return None, {}
+    subs, offsets, pos = [], [], 4 + 8 * n
+    for i, (_, _, off) in enumerate(recs):
+        data = sub if i == target else ttf[coff + off:coff + off + subtable_len(ttf, coff + off)]
+        subs.append(data)
+        offsets.append(pos)
+        pos += len(data)
+        pos = (pos + 3) // 4 * 4
+    table = bytearray(pos)
+    struct.pack_into(">HH", table, 0, 0, n)
+    for i, (plat, enc, _) in enumerate(recs):
+        struct.pack_into(">HHI", table, 4 + 8 * i, plat, enc, offsets[i])
+    for data, off in zip(subs, offsets):
+        table[off:off + len(data)] = data
+    font = TTFont(io.BytesIO(ttf))
+    raw = DefaultTable("cmap")  # the rebuilt table, written as it is
+    raw.data = bytes(table)
+    font["cmap"] = raw
+    buf = io.BytesIO()
+    font.save(buf)
+    out = buf.getvalue()
+    cmap_off = sfnt_tables(out)["cmap"][0]
+    return out, {cp: cmap_off + offsets[target] + at for cp, at in inside.items()}
+
+
+def selftest():
+    """The cmap patching, on a font built here: no game data (the CI's verify job runs this)."""
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+    # The catalog and the plan agree with the runtime's action names and defaults.
+    for action, label in KEYBOARD_DEFAULTS.items():
+        if label not in LABELS:
+            sys.exit("selftest: default %s for %s has no keycap" % (label, action))
+    for cp, spec in plan("keyboard", "console").items():
+        if spec[0] == "keycaps" and spec[1] not in KEYBOARD_DEFAULTS:
+            sys.exit("selftest: U+%04X follows unknown action %s" % (cp, spec[1]))
+
+    def box():
+        pen = TTGlyphPen(None)
+        pen.moveTo((0, 0))
+        pen.lineTo((600, 0))
+        pen.lineTo((600, 600))
+        pen.lineTo((0, 600))
+        pen.closePath()
+        return pen.glyph()
+
+    cps = sorted({cp for pair in FACE.values() for cp in pair} |
+                 {cp for pair in SHOULDER.values() for cp in pair} |
+                 {cp for specs in SYSTEM.values() for cp, _ in specs})
+    names = [".notdef"] + ["g%04X" % cp for cp in cps]
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder(names)
+    fb.setupGlyf({name: box() for name in names})
+    fb.setupHorizontalMetrics({name: (600, 0) for name in names})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupCharacterMap({cp: "g%04X" % cp for cp in cps})
+    fb.setupNameTable({"familyName": "Selftest", "styleName": "Regular"})
+    fb.setupOS2()
+    fb.setupPost()
+    fb.setupMaxp()
+    buf = io.BytesIO()
+    fb.font.save(buf)
+    ttf = buf.getvalue()
+
+    canon, offsets = canonical_cmap(ttf)
+    if canon is None:
+        sys.exit("selftest: no format 4 cmap subtable")
+    if set(offsets) < set(cps):
+        sys.exit("selftest: %d prompts are not patchable" % len(set(cps) - set(offsets)))
+    before = TTFont(io.BytesIO(canon))
+    mapping = before.getBestCmap()
+    for cp in cps:
+        if mapping.get(cp) != "g%04X" % cp:
+            sys.exit("selftest: U+%04X moved during the cmap rewrite" % cp)
+
+    # What the runtime does: write (gid - cp) into the idDelta word of the prompt's segment.
+    cp, other = cps[0], cps[-1]
+    gid = len(names) - 1
+    patched = canon[:offsets[cp]] + struct.pack(">H", (gid - cp) & 0xFFFF) + canon[offsets[cp] + 2:]
+    after = TTFont(io.BytesIO(patched)).getBestCmap()
+    if after.get(cp) != names[gid]:
+        sys.exit("selftest: patching U+%04X did not take" % cp)
+    if after.get(other) != "g%04X" % other:
+        sys.exit("selftest: patching U+%04X moved U+%04X too" % (cp, other))
+
+    key = 0x1A2B3C4D
+    if bfttf_decode(bfttf_encode(ttf, key))[0] != ttf:
+        sys.exit("selftest: BFTTF round trip")
+
+    # The keyboard build: a keycap for every catalog label at every prompt, then the cmap the runtime patches.
+    # The label font stands in for the game's *P_Seurat-B: every printable ASCII character as the same box.
+    lnames = [".notdef"] + ["c%02X" % c for c in range(32, 127)]
+    lfb = FontBuilder(1000, isTTF=True)
+    lfb.setupGlyphOrder(lnames)
+    lfb.setupGlyf({name: box() for name in lnames})
+    lfb.setupHorizontalMetrics({name: (600, 0) for name in lnames})
+    lfb.setupHorizontalHeader(ascent=800, descent=-200)
+    lfb.setupCharacterMap({c: "c%02X" % c for c in range(32, 127)})
+    lfb.setupNameTable({"familyName": "Selftest Labels", "styleName": "Regular"})
+    lfb.setupOS2()
+    lfb.setupPost()
+    lfb.setupMaxp()
+    lbuf = io.BytesIO()
+    lfb.font.save(lbuf)
+
+    want = {cp for pair in FACE.values() for cp in pair} | \
+           {cp for pair in SHOULDER.values() for cp in pair} | \
+           {cp for specs in SYSTEM.values() for cp, _ in specs}
+    kfont, _, kbd = build(ttf, Labels(TTFont(io.BytesIO(lbuf.getvalue()))), "keyboard", "console")
+    if set(kbd) != want:
+        sys.exit("selftest: keyboard draws %d of %d prompts" % (len(kbd), len(want)))
+    kbuf = io.BytesIO()
+    kfont.save(kbuf)
+    kcanon, koffsets = canonical_cmap(kbuf.getvalue())
+    if kcanon is None or set(kbd) - set(koffsets):
+        sys.exit("selftest: %d keycap prompts are not patchable" % len(set(kbd) - set(koffsets)))
+    kmap = TTFont(io.BytesIO(kcanon)).getBestCmap()
+    for cp, (action, add) in kbd.items():
+        first = kfont.getGlyphID(add[LABELS[0]])
+        for i, label in enumerate(LABELS):  # the manifest's first_gid + index(label)
+            if kfont.getGlyphID(add[label]) != first + i:
+                sys.exit("selftest: U+%04X: the %s glyph is not label %d" % (cp, label, i))
+        if kmap.get(cp) != add[KEYBOARD_DEFAULTS[action]]:
+            sys.exit("selftest: U+%04X does not start on the default %s keycap" % (cp, action))
+    cp = min(kbd)
+    action, add = kbd[cp]
+    kgid = kfont.getGlyphID(add["SPC"])
+    kpatched = kcanon[:koffsets[cp]] + struct.pack(">H", (kgid - cp) & 0xFFFF) + kcanon[koffsets[cp] + 2:]
+    if TTFont(io.BytesIO(kpatched)).getBestCmap().get(cp) != add["SPC"]:
+        sys.exit("selftest: patching U+%04X to its bound key did not take" % cp)
+
+    print("selftest: %d keycap prompts, %d patchable, cmap rewrite and BFTTF round trip ok" % (len(kbd), len(offsets)))
 
 
 PREVIEW_ROWS = [

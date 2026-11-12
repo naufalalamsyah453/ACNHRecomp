@@ -175,9 +175,10 @@ A folder **prepared by ACNHRecomp-Importer** from your own copy of the game.
 > **ACNHRecomp only accepts game folders made by ACNHRecomp-Importer.** The launcher and `tools/setup_acnh.py`
 > refuse any other folder, including an ExeFS + RomFS dump extracted with other tools. ACNHRecomp-Importer is a
 > separate companion app (Windows, macOS, Linux and Android) that turns your NSP or XCI, its update and your console's
-> keys into this folder, and recompiles the game's code on the way. It is **available on our Discord:
-> [discord.gg/VJW9Dtdu7a](https://discord.gg/VJW9Dtdu7a)**. Get it there, prepare your own copy with it, and point the
-> launcher (or `tools/setup_acnh.py --game`) at the folder it writes.
+> keys into this folder, and recompiles the game's code on the way. It is free to download from
+> **[ACNHRecomp-Importer-Releases](https://github.com/Nycolazs/ACNHRecomp-Importer-Releases/releases/latest)**; on
+> Linux take `ACNH-Recomp-Importer-linux-x64`, run `chmod +x` on it and start it (no Wine/Proton). Prepare your own
+> copy with it, and point the launcher (or `tools/setup_acnh.py --game`) at the folder it writes.
 
 The folder's layout:
 
@@ -234,8 +235,9 @@ The [releases](https://github.com/naufalalamsyah453/ACNHRecomp/releases) are rea
 of the game, and none needs a compiler. You need two things. This fork publishes the **Linux x64** package only; the
 other platforms below are built by the upstream project.
 
-1. **Your game folder**, made by [ACNHRecomp-Importer](#your-game-folder) (on our
-   [Discord](https://discord.gg/VJW9Dtdu7a)) from your own copy of the game. Run it once and keep the folder it writes.
+1. **Your game folder**, made by [ACNHRecomp-Importer](#your-game-folder)
+   ([releases](https://github.com/Nycolazs/ACNHRecomp-Importer-Releases/releases/latest)) from your own copy of the
+   game. Run it once and keep the folder it writes.
 2. **The package for your system** from the
    [latest release](https://github.com/naufalalamsyah453/ACNHRecomp/releases/latest):
 

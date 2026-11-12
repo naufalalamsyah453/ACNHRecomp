@@ -509,12 +509,15 @@ gamepads.
 - **Confirm / cancel layout:** Nintendo (A on the right) or Xbox/PlayStation (confirm on the bottom).
 - **Button icons:** the game's own on-screen button prompts are redrawn for Xbox, PlayStation, Switch or keyboard,
   or match the connected controller automatically (no controller: the keyboard). The icons are generated during
-  setup from the game's own icon font (`tools/make_button_glyphs.py`), so no game artwork is shipped.
+  setup from the game's own icon font (`tools/make_button_glyphs.py`), so no game artwork is shipped; the Linux
+  package's `glyphs-gen` does the same on the first start, in a game folder that has no `fonts/` yet.
 - **Keyboard icons:** *Button icons > Keyboard* draws every prompt as a keycap with the label of the key bound to
   that action right now (`Space`, `L Shift`, `X`, `Enter`, ...), in-game dialogs, menus and the key guide alike. A
   remap on the Controls page shows at the next start: the runtime rewrites the font's character map for the
-  current bindings, so nothing has to be regenerated. The D-pad keeps its drawn cross (it reads as the arrow keys)
-  and the sticks keep their prompts.
+  current bindings, so nothing has to be regenerated. A game folder prepared by ACNHRecomp-Importer has no
+  `fonts/`: on the first start `glyphs-gen` (beside the launcher) makes the keycap archive from that folder's own
+  `romfs/` (a few seconds, once; its log is `fonts/glyphs-gen.log` in the game folder). The D-pad keeps its drawn
+  cross (it reads as the arrow keys) and the sticks keep their prompts.
 - **Keyboard:** every key can be remapped on the Controls page.
 
 Default keyboard layout:
@@ -655,10 +658,10 @@ computer cannot hold 60.
 The game folder has not been linked yet: pass `--game <your game folder>` on the first run.
 
 **The launcher or the setup says the folder was not prepared by ACNHRecomp-Importer.**
-ACNHRecomp only accepts game folders made by ACNHRecomp-Importer. Download it on our Discord
-([discord.gg/VJW9Dtdu7a](https://discord.gg/VJW9Dtdu7a)), prepare your game with it (your NSP or XCI, update 3.0.2 and
-your console's keys) and choose the folder it writes. A folder it is still working on, or that it stopped preparing, is
-not accepted either: let it finish.
+ACNHRecomp only accepts game folders made by ACNHRecomp-Importer. Download it from
+[ACNHRecomp-Importer-Releases](https://github.com/Nycolazs/ACNHRecomp-Importer-Releases/releases/latest), prepare your
+game with it (your NSP or XCI, update 3.0.2 and your console's keys) and choose the folder it writes. A folder it is
+still working on, or that it stopped preparing, is not accepted either: let it finish.
 
 **The setup says the game folder has no exefs/ and romfs/, or that romfs/ has no Shader/ folder.**
 Choose the folder that holds both `exefs/` and `romfs/` (see [Requirements](#your-game-folder)), with the update

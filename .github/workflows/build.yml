@@ -14,7 +14,7 @@ on:
       version:
         description: "Version (release tag and package names; v is added when missing)"
         required: true
-        default: "v1.0.0-keyboard"
+        default: "v1.0.1-keyboard"
       draft:
         description: "Publish as a draft release"
         type: boolean
@@ -154,7 +154,8 @@ jobs:
           it plays the game folder ACNHRecomp-Importer prepares from your own copy.
 
           Highlights of this build: in-game button prompts as keyboard keycaps (Controls > Button icons > Keyboard),
-          following your own key bindings.
+          following your own key bindings. A game folder prepared by ACNHRecomp-Importer has no fonts/: the
+          package's glyphs-gen makes the keycaps from your own RomFS on the first start (a few seconds, once).
           EOF
           )
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

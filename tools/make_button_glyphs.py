@@ -30,6 +30,11 @@ boot to the labels of the keys actually bound (runtime/src/glyphs_keys.cpp). The
 The fonts are single-colour: the game tints glyphs with the text colour, so an Xbox icon is told apart by its
 letter, not its colour. Requires fontTools and zstandard (Pillow for --preview). --selftest builds a synthetic
 font in memory and checks the cmap patching the runtime does, so it needs no game data (CI runs it).
+
+The Linux package carries this script frozen as glyphs-gen (tools/package_glyphs_gen.sh): a game folder prepared
+by ACNHRecomp-Importer has no fonts/, so on the first start the player runs glyphs-gen --styles keyboard on that
+folder's own RomFS and writes fonts/ into it (runtime/src/glyphs_keys.cpp). Run it the same way by hand:
+glyphs-gen --romfs <game folder>/romfs --out <game folder>/fonts --styles keyboard.
 """
 import argparse
 import copy

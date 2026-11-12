@@ -26,11 +26,21 @@ case $OS in
    menu and to the desktop (keep this folder where it is: the shortcut points into it).'
            NEEDS='a 64-bit x86 PC (a CPU with AVX2: Intel Haswell / AMD Zen or newer), glibc 2.35 or newer (Ubuntu 22.04,
    Fedora 36, Debian 12 and newer) and a Vulkan 1.3 driver (Mesa, or NVIDIA'"'"'s): sudo apt install mesa-vulkan-drivers'
-           LIBS='SDL3 (zlib licence), libvpx, libvorbis and libogg (BSD). The Vulkan loader and driver are the system'"'"'s.'
+           LIBS='SDL3 (zlib licence), libvpx, libvorbis and libogg (BSD). glyphs-gen, beside the launcher, bundles
+   Python (PSF licence), fontTools (MIT) and zstandard (BSD). The Vulkan loader and driver are the system'"'"'s.'
            EOL=$'\n' ;;
   *) echo "unknown system: $OS (windows, macos or linux)"; exit 1 ;;
 esac
 VERSION=${3:-$(git describe --tags --always 2>/dev/null || echo dev)}
+
+# The Linux package carries glyphs-gen, so a folder from the importer (no fonts/) gets its keyboard icons without a
+# setup: runtime/src/glyphs_keys.cpp runs it on the first start. (No $ signs here: text() turns them into newlines.)
+case $OS in
+  linux) KEYICONS='Keyboard icons: in the game, F1 > Controls > Button icons > Keyboard names every prompt after the
+key bound to it. The package makes them from the font in your own game folder on the first start (glyphs-gen, beside
+the launcher, writes the fonts/ folder into it: a few seconds, once). Nothing of the game is shipped.' ;;
+  *)     KEYICONS='' ;;
+esac
 
 text() {
 cat <<EOF
@@ -45,10 +55,11 @@ your saves (the "user" folder inside your game folder) before playing.
 
 1. Get ACNHRecomp-Importer
    ACNHRecomp-Importer is a separate companion app that turns your own copy of the game (NSP or XCI, its update and
-   your console's keys) into the game folder ACNHRecomp plays. It is available on our Discord:
+   your console's keys) into the game folder ACNHRecomp plays. It is free to download from
 
-       https://discord.gg/VJW9Dtdu7a
+       https://github.com/Nycolazs/ACNHRecomp-Importer-Releases/releases/latest
 
+   (on Linux take ACNH-Recomp-Importer-linux-x64, run: chmod +x ACNH-Recomp-Importer-linux-x64, and start it).
    Run it on your copy and wait until it finishes. ACNHRecomp only accepts folders prepared by it.
 
 2. Start ACNHRecomp
@@ -57,6 +68,8 @@ your saves (the "user" folder inside your game folder) before playing.
 3. Choose your game folder
    The launcher asks for one thing: the folder ACNHRecomp-Importer wrote. Choose it and the game starts. Next
    time, the launcher remembers it (its home page: Play, Settings).
+
+$KEYICONS
 
 4. Keep it handy
    $KEEP
@@ -93,4 +106,10 @@ cp LICENSE "$DIR/LICENSE.txt"
   echo "(Apache 2.0). MoltenVK: https://github.com/KhronosGroup/MoltenVK (Apache 2.0). libvpx: https://chromium.googlesource.com/webm/libvpx"
   echo "(BSD 3-clause). libvorbis and libogg: https://xiph.org (BSD 3-clause). Dear ImGui (in the launcher and the"
   echo "settings screen): https://github.com/ocornut/imgui (MIT)."
+  if [ "$OS" = linux ]; then
+    echo
+    echo "glyphs-gen (beside the launcher; it makes the keyboard icons in the game folder) bundles CPython (PSF"
+    echo "licence): https://www.python.org, fontTools (MIT): https://github.com/fonttools/fonttools, and python-"
+    echo "zstandard with zstd (BSD 3-clause): https://github.com/facebook/zstd"
+  fi
 } | sed "s/\$/${EOL%$'\n'}/" > "$DIR/THIRD-PARTY.txt"

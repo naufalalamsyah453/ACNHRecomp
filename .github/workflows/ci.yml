@@ -69,6 +69,11 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check fonttools zstandard
           "$RUNNER_TEMP/venv/bin/python" tools/make_button_glyphs.py --selftest
+      - name: glyphs-gen (the package's keyboard icons generator)
+        run: |
+          # Frozen like the package's: an executable with fontTools and zstandard inside, which must run on its own
+          # (--selftest at the end of the script: the game folder that has no fonts/ gets its icons from it).
+          tools/package_glyphs_gen.sh
       - name: Dear ImGui
         run: |
           # As tools/setup_acnh.py: the settings screen is only compiled with it (uistub otherwise), and the

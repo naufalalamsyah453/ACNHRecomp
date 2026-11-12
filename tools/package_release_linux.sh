@@ -1,14 +1,16 @@
 #!/bin/bash
 # The Linux release package: the launcher and the player (acnh, built with NX_GAME_FROM_FOLDER: no game code), with
 # SDL3 (zlib), libvpx (BSD), libvorbis and libogg (BSD) beside them, found through $ORIGIN, and "Start ACNHRecomp.sh".
-# The player plays the game folder ACNHRecomp-Importer prepared (game/linux-x64/): the launcher only asks for that
-# folder (README, "Installation"). The Vulkan loader and driver are the system's. Built on the oldest system it should
-# run on (CI: Ubuntu 22.04, glibc 2.35).
+# Beside them glyphs-gen (tools/package_glyphs_gen.sh): it makes the keyboard icons from the game's own font, on the
+# first start, in a game folder that has none (the folders ACNHRecomp-Importer writes). The player plays the game
+# folder the importer prepared (game/linux-x64/): the launcher only asks for that folder (README, "Installation").
+# The Vulkan loader and driver are the system's. Built on the oldest system it should run on (CI: Ubuntu 22.04, glibc
+# 2.35).
 # usage: tools/package_release_linux.sh <version> [<SDL3 prefix> [<Vulkan-Headers include>]]
 #   <SDL3 prefix>: an SDL3 install (cmake --install of SDL's SDL3-<x.y.z>.tar.gz); default: the system's
 #   <Vulkan-Headers include>: default: the system's
 #                                                    -> private/release/ACNHRecomp-<version>-linux-x64.tar.gz
-# needs: clang, cmake, ninja, patchelf, libvulkan-dev, libvpx-dev, libvorbis-dev
+# needs: clang, cmake, ninja, patchelf, libvulkan-dev, libvpx-dev, libvorbis-dev, python3-venv
 cd "$(dirname "$0")/.." || exit 1
 set -e
 VER=${1:?usage: tools/package_release_linux.sh <version> [<SDL3 prefix> [<Vulkan-Headers include>]]}
@@ -39,6 +41,10 @@ cp "$BUILD/acnhrecomp_launcher" "$R/ACNHRecomp Launcher"
 cp "$BUILD/acnh" "$R/acnh"
 cp assets/acnhrecomp.png "$R/acnhrecomp.png"  # the icon of the shortcut "Add to desktop" makes (launcher/desktop.cpp)
 strip "$R/ACNHRecomp Launcher" "$R/acnh"
+# glyphs-gen: the keyboard icons of a game folder that has none, made from its RomFS on the first start
+# (runtime/src/glyphs_keys.cpp). One file, no Python on the user's system: built here when it is not around yet.
+[ -f private/release/glyphs-gen ] || tools/package_glyphs_gen.sh
+cp private/release/glyphs-gen "$R/glyphs-gen"
 # The libraries a stock system may lack (or have another version of), beside the executables: their sonames, found
 # through $ORIGIN. The C and C++ runtimes, X11 / Wayland, the Vulkan loader and the GPU driver stay the system's.
 for lib in libSDL3.so.0 libvpx.so libvorbis.so.0 libogg.so.0; do

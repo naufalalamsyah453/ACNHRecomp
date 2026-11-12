@@ -9,13 +9,27 @@
 // This points each prompt at the glyph of the key bound to its action (input.key.<action>, the settings screen's
 // Controls page) and caches the result under fonts/glyphs_keyboard/cache/<hash>.sarc.zs, so a remap shows at the
 // next start with nothing to regenerate. The game opens the archive once, while booting (glyphs.cpp).
+//
+// A folder ACNHRecomp-Importer prepared has no fonts/: the importer does not know this fork. When patch.txt is
+// missing, the glyphs-gen beside the player (tools/make_button_glyphs.py, frozen by tools/package_glyphs_gen.sh)
+// makes the archive from the folder's own RomFS on the first start, so nothing of the game ships.
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <map>
 #include <mutex>
 #include <string>
+
+#if defined(__linux__)
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <nx/runtime.h>
 
@@ -56,6 +70,79 @@ bool write_all(const std::string& path, const std::string& data) {
         fs::rename(fs::u8path(tmp), fs::u8path(path), ec);
     }
     return !ec;
+}
+
+#if defined(__linux__)
+std::string utf8(const fs::path& p) {
+    auto s = p.u8string();
+    return std::string(s.begin(), s.end());
+}
+#endif
+
+// Makes the keyboard archive from the game's own font, with the glyphs-gen the package carries beside the player:
+// ACNHRecomp-Importer knows nothing of this fork's fonts/, so a folder it prepared has none. glyphs-gen is
+// tools/make_button_glyphs.py frozen (tools/package_glyphs_gen.sh); it embeds no game data, it reads the font of
+// the folder it is given. False when there is no glyphs-gen (a build from source) or no RomFS to read.
+bool generate_keyboard_archive(const std::string& root) {
+#if defined(__linux__)
+    std::error_code ec;
+    const fs::path self = fs::read_symlink("/proc/self/exe", ec);
+    if (ec) return false;
+    const fs::path tool = self.parent_path() / "glyphs-gen";
+    if (!fs::is_regular_file(tool, ec)) return false;
+
+    std::string romfs;  // an importer folder has romfs/; the setup's data folder has extract/romfs/
+    for (const char* sub : {"romfs", "extract/romfs"}) {
+        fs::path p = fs::u8path(plat::data_root()) / fs::u8path(sub);
+        if (fs::is_regular_file(p / "Font" / "ScalableFont.sarc.zs", ec)) {
+            romfs = utf8(p);
+            break;
+        }
+    }
+    if (romfs.empty()) return false;
+
+    const std::string out = utf8(fs::u8path(root).parent_path());  // <data root>/fonts
+    const std::string out_log = out + "/glyphs-gen.log";
+    fs::create_directories(fs::u8path(out), ec);
+    const std::string tool_s = utf8(tool);
+    log("glyphs: keyboard icons are not generated yet: running glyphs-gen (first start, a few seconds)");
+
+    // The generator runs in its own process, its output in fonts/glyphs-gen.log (there may be no terminal).
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&fa, 1, out_log.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    char a_romfs[] = "--romfs", a_out[] = "--out", a_styles[] = "--styles", a_keyboard[] = "keyboard";
+    char* argv[] = {const_cast<char*>(tool_s.c_str()), a_romfs, const_cast<char*>(romfs.c_str()), a_out,
+                    const_cast<char*>(out.c_str()), a_styles, a_keyboard, nullptr};
+    pid_t pid = -1;
+    const int spawn = posix_spawn(&pid, tool_s.c_str(), &fa, nullptr, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    if (spawn != 0) {
+        log("glyphs: cannot run %s (%s); the original icons are shown", tool_s.c_str(), std::strerror(spawn));
+        return false;
+    }
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited < 0) {
+        log("glyphs: glyphs-gen: waitpid: %s; the original icons are shown", std::strerror(errno));
+        return false;
+    }
+    const int code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    if (code != 0) {
+        log("glyphs: glyphs-gen failed (%d): see %s; the original icons are shown", code, out_log.c_str());
+        return false;
+    }
+    log("glyphs: keyboard icons generated in %s", out.c_str());
+    return true;
+#else
+    (void)root;  // only the Linux package carries glyphs-gen
+    return false;
+#endif
 }
 
 // The key bindings' defaults, as kKeyNames in platform_sdl.cpp (the only platform with a keyboard).
@@ -124,15 +211,20 @@ std::string keyboard_glyph_archive() {
     tried = true;
 
     const std::string root = plat::data_root() + "/fonts/glyphs_keyboard";
+    std::error_code ec;
+    if (!fs::is_regular_file(fs::u8path(root + "/patch.txt"), ec))
+        generate_keyboard_archive(root);  // a folder from ACNHRecomp-Importer has no fonts/
     glyphs::Manifest manifest;
     if (!manifest.load(read_all(root + "/patch.txt"))) {
-        log("glyphs: keyboard icons need %s/patch.txt (run tools/make_button_glyphs.py --styles keyboard)",
+        log("glyphs: keyboard icons need %s/patch.txt (glyphs-gen makes them; from source: "
+            "tools/make_button_glyphs.py --styles keyboard)",
             root.c_str());
         return served;
     }
     const std::string base = read_all(root + "/base.sarc");
     if (base.empty()) {
-        log("glyphs: keyboard icons need %s/base.sarc (run tools/make_button_glyphs.py --styles keyboard)",
+        log("glyphs: keyboard icons need %s/base.sarc (glyphs-gen makes them; from source: "
+            "tools/make_button_glyphs.py --styles keyboard)",
             root.c_str());
         return served;
     }
@@ -149,7 +241,6 @@ std::string keyboard_glyph_archive() {
     std::snprintf(name, sizeof name, "%016llx", static_cast<unsigned long long>(hash));
     const std::string cache = root + "/cache/" + name + ".sarc.zs";
 
-    std::error_code ec;
     if (fs::is_regular_file(fs::u8path(cache), ec)) {
         served = cache;
         log("glyphs: keyboard icons <- %s", cache.c_str());

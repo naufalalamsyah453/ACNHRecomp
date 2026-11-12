@@ -22,10 +22,11 @@ one (runtime/src/glyphs.cpp). Everything written embeds game data: it stays in p
 
 The keyboard style (keycaps with the bound key's label) is the one exception to "one archive per layout": the
 face-button layout only moves pad buttons, and the keys are the same either way, so it has no <layout> directory.
-Because the keys can be remapped in the settings screen, its archive carries a keycap glyph for every label of
-every prompt plus a small manifest (<out>/glyphs_keyboard/patch.txt), and the runtime rewrites the font's cmap at
-boot to the labels of the keys actually bound (runtime/src/glyphs_keys.cpp). The archive at
-<out>/glyphs_keyboard/romfs/ is the fallback (fresh bindings), kept so the game always has valid icons.
+Because the keys can be remapped in the settings screen, its archive carries a keycap glyph for every label of the
+catalog (one set shared by every prompt of the same shape) plus a small manifest (<out>/glyphs_keyboard/patch.txt),
+and the runtime rewrites the font's cmap at boot to the labels of the keys actually bound
+(runtime/src/glyphs_keys.cpp). The archive at <out>/glyphs_keyboard/romfs/ is the fallback (fresh bindings), kept so
+the game always has valid icons.
 
 The fonts are single-colour: the game tints glyphs with the text colour, so an Xbox icon is told apart by its
 letter, not its colour. Requires fontTools and zstandard (Pillow for --preview). --selftest builds a synthetic
@@ -471,6 +472,17 @@ def plan(style, layout):
     return out
 
 
+def strip_hinting(font):
+    """Drop every glyph program. They are over 40% of ParkExt's glyf table, and the game's font loader indexes loca
+    with 16-bit halves: a glyf table over 131070 bytes makes it read garbage offsets and crash at boot. The keyboard
+    icons need the room for their keycaps; without hinting the outlines are drawn exactly the same, only unhinted."""
+    for name in font.getGlyphOrder():
+        glyph = font["glyf"][name]
+        program = getattr(glyph, "program", None)
+        if program is not None and program.getBytecode():
+            program.fromBytecode(b"")
+
+
 def build(ext_ttf, labels, style, layout):
     """ParkExt (TTF bytes) with the plan's glyphs replaced; returns (TTFont, {code point: kind}, keyboard) where
     keyboard is {code point: (action, {label: glyph name})} for the keycap prompts (empty for other styles)."""
@@ -482,6 +494,7 @@ def build(ext_ttf, labels, style, layout):
     glyf, hmtx = font["glyf"], font["hmtx"]
     painter = Painter(labels)
     order, done, keyboard = list(font.getGlyphOrder()), {}, {}  # a copy: glyf appends to its own order as glyphs go in
+    keycaps = {}  # (kind, solid) -> {label: glyph name}: one set shared by every prompt of that shape
     for cp, spec in sorted(plan(style, layout).items()):
         name = cmap.get(cp)
         if not name:
@@ -495,21 +508,29 @@ def build(ext_ttf, labels, style, layout):
             continue
         if op == "keycaps":
             action, box_cp, kind, solid = spec[1:]
-            g0 = orig["glyf"][ocmap[box_cp]]
-            box = (g0.xMin, g0.yMin, g0.xMax, g0.yMax)
-            add = {}
-            for label in LABELS:
-                gname = "kbd%04X_%s" % (cp, label)
-                glyph = (painter.key(box, label, solid) if kind == "key"
-                         else painter.shoulder(box, label, action.startswith("z"), solid))
-                glyf[gname] = glyph
-                glyph.recalcBounds(glyf)
-                hmtx[gname] = (orig["hmtx"][name][0], glyph.xMin)  # same advance as the old icon
-                order.append(gname)
-                add[label] = gname
+            if style == "keyboard":
+                solid = True  # one filled keycap per shape for every prompt: four sets would not fit the glyf table
+            add = keycaps.get((kind, solid))
+            if add is None:
+                # One keycap per catalog label, reused by every prompt of this shape. The runtime points the prompt's
+                # cmap at the label of the key bound to it, so the label block only has to stay in LABELS order; a
+                # font per prompt would blow up ParkExt's glyf table (see strip_hinting).
+                g0 = orig["glyf"][ocmap[box_cp]]
+                box = (g0.xMin, g0.yMin, g0.xMax, g0.yMax)
+                add = {}
+                for label in LABELS:
+                    gname = "kbd%s%s_%s" % (kind, "" if solid else "line", label)
+                    glyph = (painter.key(box, label, solid) if kind == "key"
+                             else painter.shoulder(box, label, action.startswith("z"), solid))
+                    glyf[gname] = glyph
+                    glyph.recalcBounds(glyf)
+                    hmtx[gname] = (orig["hmtx"][name][0], glyph.xMin)  # the box glyph's advance
+                    order.append(gname)
+                    add[label] = gname
+                keycaps[(kind, solid)] = add
             keyboard[cp] = (action, add)
             cmap[cp] = add[KEYBOARD_DEFAULTS[action]]  # what a fresh binding shows (the fallback archive)
-            done[cp] = "keycaps (%d)" % len(add)
+            done[cp] = "keycaps (%d labels)" % len(add)
             continue
         kind, params, box_cp = spec[1:]
         g0 = orig["glyf"][cmap[box_cp]]
@@ -520,6 +541,8 @@ def build(ext_ttf, labels, style, layout):
         hmtx[name] = (orig["hmtx"][name][0], glyph.xMin)  # same advance as before; lsb from the new outline
         done[cp] = kind
     font.setGlyphOrder(order)
+    if style == "keyboard":
+        strip_hinting(font)
     if "DSIG" in font:  # a signature over the old tables
         del font["DSIG"]
     return font, done, keyboard

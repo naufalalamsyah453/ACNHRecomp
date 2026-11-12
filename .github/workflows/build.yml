@@ -121,15 +121,10 @@ jobs:
           EOF
       - uses: actions/upload-artifact@v7
         with:
-          name: package-linux-x64-zip
-          path: private/release/ACNHRecomp-${{ env.VERSION }}-linux-x64.zip
-          archive: false
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: package-linux-x64-targz
-          path: private/release/ACNHRecomp-${{ env.VERSION }}-linux-x64.tar.gz
-          archive: false
+          name: package-linux-x64
+          path: |
+            private/release/ACNHRecomp-${{ env.VERSION }}-linux-x64.zip
+            private/release/ACNHRecomp-${{ env.VERSION }}-linux-x64.tar.gz
           if-no-files-found: error
 
   release:
@@ -141,6 +136,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
+          pattern: package-*
           path: dist
           merge-multiple: true
       - name: Publish
